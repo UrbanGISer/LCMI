@@ -1,0 +1,7 @@
+variable,mean_abs_baseline,mean_abs_residual,mean_abs_total,residual_share,GeoShapley_mean_abs_primary
+log_sqft_living,0.133,0.047,0.132,0.356,0.14
+grade,0.061,0.032,0.063,0.509,0.113
+view,0.019,0.023,0.03,0.77,0.023
+age,0.023,0.022,0.023,0.981,0.028
+waterfront,0.001,0.003,0.003,0.983,0.003
+log_sqft_lot,0.001,0.001,0.001,0.771,0.053
