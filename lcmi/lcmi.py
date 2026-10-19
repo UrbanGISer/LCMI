@@ -1,26 +1,40 @@
 """
-cmi_model.py  —  Conditional Mutual Information (CMI) local spatial regression.
+lcmi — Local Conditional Mutual Information for interpretable, nonlinear
+spatially varying effects.
 
-Usage
------
-    from cmi_model import CMI
+Two-stage estimator
+-------------------
+Stage 1  local conditional mutual information I(x_j; y | other x) in a k-NN
+         window around every location (KSG estimator)  →  {v}_lws
+         and global partial-residual curves G_j(x_j).
+Stage 2  varying-coefficient model  y = b_0(s) + Σ_j b_j(s) · g_j(x_j)
+         b_j(s): tensor-product P-spline surfaces (GCV-tuned penalty)
+         g_j   : learned transforms, initialised from G_j and re-estimated
+                 jointly with b(s) by backfitting
+         →  {v}_esd  (scale-identified coefficient: Y change per 1 SD of g_j)
+            {v}_lin  (linear-equivalent dY/dx_j), {v}_vc (raw multiplier)
 
-    model = CMI(df, u='u', v='v', y='y', xlist=['X1', 'X2', 'X3'])
-    model.fit()               # auto search k / bw
-    model.fit(k=8, bw=80)     # fixed k / bw
+Quick start
+-----------
+    from lcmi import CMI
 
-    model.plot_pdp()          # PDP plot (one row per variable, 3 columns)
-
-    df_out    = model.df_out        # original df + beta cols + y_pred
-    pdp_table = model.pdp_table     # wide PDP table
-    k_table   = model.k_search_table
-    bw_table  = model.bw_search_table
+    model = CMI(df, u="u", v="v", y="y", xlist=["x1", "x2", "x3"]).fit()
+    model.summary()
+    model.coef_table()                 # summary of the coefficient surfaces
+    model.plot_coefficients()          # maps of {v}_esd
+    model.plot_transforms()            # learned g_j curves (read signs with these)
+    out = model.df_out                 # data + *_lws, *_esd, *_lin, *_vc, y_pred_vc
 """
+
+
 
 from __future__ import annotations
 
-import warnings
+__version__ = "0.1.0"
+
+import functools
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -37,7 +51,21 @@ from scipy.stats import gaussian_kde, t as t_dist
 from sklearn.neighbors import NearestNeighbors
 from numpy.linalg import lstsq as np_lstsq
 
-warnings.filterwarnings("ignore")
+
+
+def _quiet_matmul(fn):
+    """Silence spurious 'encountered in matmul' RuntimeWarnings raised by some
+    NumPy ≥ 2 / BLAS builds (e.g. macOS Accelerate) on finite inputs.
+    Other warnings are left untouched."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*encountered in matmul",
+                                    category=RuntimeWarning)
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 # ── Result container ──────────────────────────────────────────────────
@@ -405,6 +433,11 @@ class CMI:
     seed         : int           random seed
     """
 
+    def _log(self, *args, **kwargs):
+        if getattr(self, "verbose", True):
+            print(*args, **kwargs)
+
+    @_quiet_matmul
     def __init__(
         self,
         df: pd.DataFrame,
@@ -418,19 +451,23 @@ class CMI:
         ridge_lambda: float = 1e-4,
         n_jobs: int = -1,
         seed: int = 42,
-        wls: bool = True,
+        wls: bool = False,
         chunk_size: int = 2000,
         stage2: str = "pspline",
+        verbose: bool = True,
     ):
         """
         stage2 : "pspline" (default) — penalised-spline varying-coefficient stage 2
                  with joint backfitting of g_j (outputs *_vc, *_esd, *_lin).
-                 "none" — skip it. The legacy kernel stage 2 (*_wls) is controlled
-                 separately by ``wls``.
+                 "none" — skip it.
+        wls    : also run the legacy kernel local-WLS stage 2 of the original
+                 IJGIS implementation (outputs *_wls). Default False.
+        verbose: print progress.
         """
         if stage2 not in ("pspline", "none"):
             raise ValueError("stage2 must be 'pspline' or 'none'")
         self._stage2 = stage2
+        self.verbose = bool(verbose)
         self.df_raw = df.copy()
         self.u_col = u
         self.v_col = v
@@ -487,7 +524,7 @@ class CMI:
         self._n_jobs = min(self._n_jobs, self.p)
 
         max_bw = min(max(self.bw_candidates) + 20, self.n - 1)
-        print(
+        self._log(
             f"  [CMI.__init__] Building nn_idx at max_bw={max_bw} ...",
             end=" ",
             flush=True,
@@ -498,13 +535,13 @@ class CMI:
         _, self._nn_idx = nn.kneighbors(self._coords)
         self._nn_idx = self._nn_idx.astype(np.int32)
         del nn
-        print(f"{time.perf_counter()-t0:.2f}s  shape={self._nn_idx.shape}")
+        self._log(f"{time.perf_counter()-t0:.2f}s  shape={self._nn_idx.shape}")
 
-        print(f"  [CMI.__init__] Building PDP sample points ...", end=" ", flush=True)
+        self._log(f"  [CMI.__init__] Building PDP sample points ...", end=" ", flush=True)
         self._pdp_sample_idx, self._pdp_bin_edges = _build_pdp_sample_points(
             self.ALL_X, self.xlist, n_bins=60, pts_per_bin=80, seed=self.seed
         )
-        print(f"{len(self._pdp_sample_idx)} points selected")
+        self._log(f"{len(self._pdp_sample_idx)} points selected")
 
         self._Z_others = {j: np.delete(self.ALL_X, j, axis=1) for j in range(self.p)}
 
@@ -589,6 +626,7 @@ class CMI:
 
     # ── fit ───────────────────────────────────────────────────────────
 
+    @_quiet_matmul
     def fit(
         self,
         k: int | dict | None = None,
@@ -621,9 +659,9 @@ class CMI:
         single_k = isinstance(k, int)
         single_bw = isinstance(bw, int)
 
-        print(f"\n{'='*60}")
-        print(f"CMI.fit()  n={n}  p={p}  vars={xlist}")
-        print(f"{'='*60}")
+        self._log(f"\n{'='*60}")
+        self._log(f"CMI.fit()  n={n}  p={p}  vars={xlist}")
+        self._log(f"{'='*60}")
 
         for j, vn in enumerate(xlist):
             nl = nl_flags[j]
@@ -633,9 +671,9 @@ class CMI:
             elif isinstance(k, dict):
                 k_j, k_scores = int(k[vn]), None
             else:
-                print(f"  k search [{vn}] ...", end=" ", flush=True)
+                self._log(f"  k search [{vn}] ...", end=" ", flush=True)
                 k_j, k_scores = self._search_k(j, nl)
-                print(f"best k={k_j}")
+                self._log(f"best k={k_j}")
                 for kv, sc in k_scores.items():
                     k_search_records.append(
                         {"variable": vn, "k_candidate": kv, "score": sc}
@@ -648,7 +686,7 @@ class CMI:
             elif isinstance(bw, dict):
                 bw_j, bw_scores = int(bw[vn]), None
             else:
-                print(f"  BW search [{vn}] k={k_j} ...", end=" ", flush=True)
+                self._log(f"  BW search [{vn}] k={k_j} ...", end=" ", flush=True)
                 bw_j, bw_scores = self._search_bw(
                     j,
                     nl,
@@ -657,7 +695,7 @@ class CMI:
                     n_probe=n_probe,
                     seed=self.seed + j,
                 )
-                print(f"best bw={bw_j}")
+                self._log(f"best bw={bw_j}")
                 for bwv, sc in bw_scores.items():
                     bw_search_records.append(
                         {"variable": vn, "bw_candidate": bwv, "score": sc}
@@ -680,10 +718,10 @@ class CMI:
             else None
         )
 
-        print(f"\n  Selected k:  { {v: k_per_var[v]  for v in xlist} }")
-        print(f"  Selected BW: { {v: bw_per_var[v] for v in xlist} }")
+        self._log(f"\n  Selected k:  { {v: k_per_var[v]  for v in xlist} }")
+        self._log(f"  Selected BW: { {v: bw_per_var[v] for v in xlist} }")
 
-        print(f"\n  Computing CMI surfaces (n_jobs={self._n_jobs}) ...")
+        self._log(f"\n  Computing CMI surfaces (n_jobs={self._n_jobs}) ...")
         job_args = []
         for j, vn in enumerate(xlist):
             nl = nl_flags[j]
@@ -709,12 +747,12 @@ class CMI:
                 delayed(_compute_one_surface)(a) for a in job_args
             ):
                 cmi_surfaces[vn] = surf
-                print(f"    [{vn}] done  mean={surf.mean():.4f}  max={surf.max():.4f}")
+                self._log(f"    [{vn}] done  mean={surf.mean():.4f}  max={surf.max():.4f}")
         else:
             for args in job_args:
                 vn, surf = _compute_one_surface(args)
                 cmi_surfaces[vn] = surf
-                print(f"    [{vn}] done  mean={surf.mean():.4f}  max={surf.max():.4f}")
+                self._log(f"    [{vn}] done  mean={surf.mean():.4f}  max={surf.max():.4f}")
 
         Z_sets = {j: np.delete(self.ALL_X, j, axis=1) for j in range(p)}
         y_resids = {}
@@ -784,9 +822,9 @@ class CMI:
         ss_tot = np.sum((self.Y - self.Y.mean()) ** 2)
         r2 = max(0.0, 1 - ss_res / (ss_tot + 1e-12))
 
-        print(f"\n  alpha = {np.round(alpha, 4)}")
-        print(f"  R²    = {r2:.4f}")
-        print(f"  total time = {time.perf_counter()-t0_total:.1f}s")
+        self._log(f"\n  alpha = {np.round(alpha, 4)}")
+        self._log(f"  R²    = {r2:.4f}")
+        self._log(f"  total time = {time.perf_counter()-t0_total:.1f}s")
 
         df_out = self.df_raw.copy()
         for j, vn in enumerate(xlist):
@@ -825,6 +863,7 @@ class CMI:
 
     # ── Stage 2: penalised-spline varying coefficients (default) ─────
 
+    @_quiet_matmul
     def fit_vc(
         self,
         n_basis: int = 12,
@@ -908,7 +947,7 @@ class CMI:
         res.df_out["vc_intercept"] = beta[:, 0]
         res.df_out["y_pred_vc"] = fit["yhat"]
         if verbose:
-            print(f"  [stage 2 P-spline VC] R²={r2_vc:.4f}  edf={fit['edf']:.1f}  "
+            self._log(f"  [stage 2 P-spline VC] R²={r2_vc:.4f}  edf={fit['edf']:.1f}  "
                   f"λ={np.round(fit['lam'], 3).tolist()}  {time.perf_counter()-t0:.1f}s")
         return self
 
@@ -1459,10 +1498,12 @@ class CMI:
                 fontsize=suptitle_fontsize,
                 fontweight="bold",
             )
-        if show_suptitle:
-            plt.tight_layout(rect=[0.0, 0.0, 1.0, 0.96])
-        else:
-            plt.tight_layout()
+        with warnings.catch_warnings():  # box-aspect axes are not tight_layout-compatible
+            warnings.simplefilter("ignore", UserWarning)
+            if show_suptitle:
+                plt.tight_layout(rect=[0.0, 0.0, 1.0, 0.96])
+            else:
+                plt.tight_layout()
         fig.set_dpi(float(dpi))
         if save:
             fig.savefig(save, dpi=dpi, bbox_inches="tight")
@@ -1514,7 +1555,7 @@ class CMI:
         nn.fit(self._coords)
         dists_all, idx_all = nn.kneighbors(self._coords)
 
-        print(
+        self._log(
             f"  [local beta] bw_dist={bw_dist_use:.4f}{'(auto)' if bw_dist is None else '(manual)'}  k={k_wls}"
         )
 
@@ -1601,7 +1642,7 @@ class CMI:
         ss_tot = float(np.sum((self.Y - self.Y.mean()) ** 2))
         r2_wls = max(0.0, 1.0 - ss_res / (ss_tot + 1e-12))
 
-        print(f"  [local beta] scale={np.round(scale_wls,4)}  R²_wls={r2_wls:.4f}")
+        self._log(f"  [local beta] scale={np.round(scale_wls,4)}  R²_wls={r2_wls:.4f}")
 
         res.beta_wls = beta_wls_scaled
         res.meta.update(
@@ -1614,6 +1655,7 @@ class CMI:
 
     # ── fit_local_beta (public wrapper — re-run with custom bw_dist) ──
 
+    @_quiet_matmul
     def fit_local_beta(self, bw_dist: float = None, n_neighbors: int = None) -> "CMI":
         """
         Re-run local WLS beta estimation with a custom bw_dist or n_neighbors.
@@ -1728,3 +1770,87 @@ class CMI:
         print(f"  BW per var: {m['bw_per_var']}")
         print(f"  ridge λ   : {m.get('ridge_lambda', 'n/a')}")
         print(f"{'='*50}")
+
+    # ── Convenience: coefficient table and plots ─────────────────────
+
+    def coef_table(self, kind: str = "esd") -> pd.DataFrame:
+        """Summary statistics of the stage-2 coefficient surfaces.
+
+        kind : "esd" (default, scale-identified), "lin" or "vc".
+        Columns: mean, sd, min, q05, median, q95, max, share_positive.
+        """
+        if self.result is None or self.result.beta_vc is None:
+            raise RuntimeError("Call fit() with stage2='pspline' first.")
+        rows = []
+        for vn in self.xlist:
+            b = self.result.df_out[f"{vn}_{kind}"].to_numpy(float)
+            q = np.percentile(b, [5, 50, 95])
+            rows.append(dict(variable=vn, mean=b.mean(), sd=b.std(), min=b.min(),
+                             q05=q[0], median=q[1], q95=q[2], max=b.max(),
+                             share_positive=float(np.mean(b > 0))))
+        return pd.DataFrame(rows).set_index("variable")
+
+    def plot_coefficients(self, kind: str = "esd", cmap: str = "RdBu_r",
+                          symmetric: bool = True, s: float = 2.0, ncols: int = 3,
+                          panel_size: float = 3.6, save: str = None):
+        """Map the stage-2 coefficient surfaces on the original coordinates.
+
+        kind      : "esd" (default), "lin", "vc", or "lws" (stage-1 CMI)
+        symmetric : centre the colour scale at 0 (diverging maps for signed effects)
+        """
+        if self.result is None:
+            raise RuntimeError("Call fit() first.")
+        u = self.df_raw[self.u_col].to_numpy(float)
+        v = self.df_raw[self.v_col].to_numpy(float)
+        p = self.p
+        nrows = int(np.ceil(p / ncols))
+        fig, axes = plt.subplots(nrows, min(ncols, p),
+                                 figsize=(panel_size * min(ncols, p), panel_size * nrows),
+                                 squeeze=False)
+        for j, vn in enumerate(self.xlist):
+            ax = axes[j // ncols, j % ncols]
+            z = self.result.df_out[f"{vn}_{kind}"].to_numpy(float)
+            if symmetric and kind != "lws":
+                lim = np.nanpercentile(np.abs(z), 99) or 1.0
+                sc = ax.scatter(u, v, c=z, s=s, cmap=cmap, vmin=-lim, vmax=lim)
+            else:
+                sc = ax.scatter(u, v, c=z, s=s, cmap="viridis" if kind == "lws" else cmap)
+            ax.set_title(f"{vn} ({kind})", fontsize=11)
+            ax.set_xticks([]), ax.set_yticks([])
+            ax.set_aspect("equal", adjustable="datalim")
+            plt.colorbar(sc, ax=ax, fraction=0.046)
+        for k in range(p, nrows * min(ncols, p)):
+            axes[k // ncols, k % ncols].axis("off")
+        fig.tight_layout()
+        if save:
+            fig.savefig(save, dpi=200, bbox_inches="tight")
+        return fig
+
+    def plot_transforms(self, ncols: int = 3, panel_size: float = 3.2, save: str = None):
+        """Plot the learned transforms g_j(x_j) (stage 2, after orientation).
+
+        The sign of b_j(s) is read relative to these curves: b_j > 0 means the
+        local effect has the shape shown; b_j < 0 means its mirror image.
+        """
+        if self.result is None or self.result.G_vc is None:
+            raise RuntimeError("Call fit() with stage2='pspline' first.")
+        p = self.p
+        nrows = int(np.ceil(p / ncols))
+        fig, axes = plt.subplots(nrows, min(ncols, p),
+                                 figsize=(panel_size * min(ncols, p), panel_size * 0.8 * nrows),
+                                 squeeze=False)
+        for j, vn in enumerate(self.xlist):
+            ax = axes[j // ncols, j % ncols]
+            x = self.ALL_X[:, j]
+            g = self.result.G_vc[:, j]
+            o = np.argsort(x)
+            ax.plot(x[o], (g - g.mean())[o] / (g.std() + 1e-12), color="#2F6DB3", lw=2)
+            ax.axhline(0, color="#aaa", lw=0.7, ls="--")
+            ax.set_title(f"g({vn})  (standardised)", fontsize=10)
+            ax.set_xlabel(vn)
+        for k in range(p, nrows * min(ncols, p)):
+            axes[k // ncols, k % ncols].axis("off")
+        fig.tight_layout()
+        if save:
+            fig.savefig(save, dpi=200, bbox_inches="tight")
+        return fig
