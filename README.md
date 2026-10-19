@@ -53,6 +53,8 @@ y_new = model.predict(new_df) # predict at new locations / predictor values
 | `vc_intercept`, `y_pred_vc` | Intercept surface and fitted values (stage 2). |
 | `y_pred` | Stage-1 fitted values. |
 
+**Categorical predictors.** Variables listed in `categorical=` are one-hot encoded whenever they act as conditioning covariates. Their local information `{x}_lws` uses a label-free discrete–continuous estimator (Ross 2014), and their stage-2 transform is a learned category-effect profile, so results do not depend on how categories are coded. For a categorical `x`, `b(s) > 0` means the local ranking of categories matches the overall profile, and `b(s) < 0` means it is reversed. `{x}_lin` is not defined (NaN).
+
 **Reading signs.** A coefficient `b(s) > 0` means the local effect has the shape shown by `plot_transforms()`; `b(s) < 0` means the mirror image. Each `g(x)` is oriented to increase with `x`, or, for U-shaped effects, to be high at the extremes.
 
 ## Common options
@@ -63,6 +65,7 @@ CMI(df, u, v, y, xlist,
     bw_candidates=None,              # stage-1 window sizes (None = automatic)
     n_jobs=-1,
     verbose=True,
+    categorical=["land_use"],        # nominal predictors (unordered categories)
     wls=False)                       # also run the original kernel-WLS stage 2 (*_wls)
 
 model.fit()                          # automatic k / bandwidth search

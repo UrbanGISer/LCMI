@@ -63,3 +63,27 @@ def test_predict_matches_fit_and_generalises():
     assert r2 > 0.85
     comp = mt.predict(df[te], return_components=True)
     assert {"x1_esd", "x2_esd", "vc_intercept", "y_pred"} <= set(comp.columns)
+
+
+def test_categorical_predictor_label_invariant():
+    rng = np.random.default_rng(3)
+    g = 35
+    u1 = np.linspace(0, 1, g)
+    U, V = np.meshgrid(u1, u1)
+    u, v = U.ravel(), V.ravel()
+    x1 = rng.normal(size=u.size)
+    c = rng.integers(0, 4, u.size)
+    mu = np.array([0.9, -0.9, 0.4, -0.4])
+    b2 = 0.5 + 1.5 * u
+    y = (1 + v) * x1 + b2 * mu[c] + rng.normal(0, .3, u.size)
+    perm = np.array([2, 0, 3, 1])
+    fits = []
+    for codes in (c, perm[c]):
+        df = pd.DataFrame(dict(u=u, v=v, y=y, x1=x1, c=codes))
+        m = CMI(df, u="u", v="v", y="y", xlist=["x1", "c"], categorical=["c"],
+                verbose=False).fit(bw=60)
+        fits.append(m.df_out["c_esd"].to_numpy())
+    truth = b2 * mu[c].std()
+    assert abs(np.corrcoef(fits[0], fits[1])[0, 1]) > 0.9999      # relabelling-invariant
+    assert abs(np.corrcoef(fits[0], truth)[0, 1]) > 0.95
+    assert np.isnan(m.df_out["c_lin"]).all()

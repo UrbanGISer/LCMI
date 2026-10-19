@@ -228,9 +228,11 @@ def _ols_resid_scalar(target: np.ndarray, regressors: np.ndarray, ridge_lambda: 
 
 
 def _precompute_residuals(
-    Y, ALL_X, col_idx, nl_flag, nn_idx, ridge_lambda: float, chunk_size: int = 2000
+    Y, ALL_X, col_idx, nl_flag, nn_idx, ridge_lambda: float, chunk_size: int = 2000,
+    Z_other=None,
 ):
-    Z_other = np.delete(ALL_X, col_idx, axis=1)
+    if Z_other is None:
+        Z_other = np.delete(ALL_X, col_idx, axis=1)
     Y_nb = Y[nn_idx].astype(np.float32)
     Xj_nb = ALL_X[nn_idx, col_idx].astype(np.float32)
     Z_nb = Z_other[nn_idx].astype(np.float32)
@@ -247,6 +249,31 @@ def _precompute_residuals(
     return Yr_all, Xr_all
 
 
+def _mi_ross(xc: np.ndarray, y: np.ndarray, k: int = 3) -> float:
+    """Mutual information between a discrete x and a continuous y (Ross 2014,
+    PLoS ONE 9:e87357). Invariant to the labelling of x's categories."""
+    xc = np.asarray(xc)
+    y = np.asarray(y, dtype=np.float64)
+    n = len(y)
+    if n < k + 2 or np.unique(xc).size < 2:
+        return 0.0
+    D = np.abs(y[:, None] - y[None, :])
+    same = xc[:, None] == xc[None, :]
+    nx = same.sum(1)
+    kk = np.minimum(k, nx - 1)
+    ok = kk >= 1
+    if not ok.any():
+        return 0.0
+    Ds = np.where(same, D, np.inf)
+    np.fill_diagonal(Ds, np.inf)
+    Ds.sort(1)
+    d = Ds[np.arange(n), np.maximum(kk, 1) - 1]
+    m = (D <= d[:, None]).sum(1) - 1
+    val = (digamma(n) - np.mean(digamma(nx[ok])) + np.mean(digamma(kk[ok]))
+           - np.mean(digamma(np.maximum(m[ok], 1))))
+    return max(0.0, float(val))
+
+
 def _compute_one_surface(args):
     (
         var_name,
@@ -259,13 +286,19 @@ def _compute_one_surface(args):
         bw_sel,
         ridge_lambda,
         chunk_size,
+        Z_other,
+        is_cat,
     ) = args
 
     Yr_all, Xr_all = _precompute_residuals(
-        Y, ALL_X, col_idx, nl_flag, nn_idx, ridge_lambda, chunk_size
+        Y, ALL_X, col_idx, nl_flag, nn_idx, ridge_lambda, chunk_size, Z_other=Z_other
     )
     n = len(Y)
-    surf = np.array([_mi_ksg_sorted(Xr_all[i], Yr_all[i], k=k_sel) for i in range(n)])
+    if is_cat:   # categorical focal variable: label-free discrete–continuous MI
+        codes = ALL_X[:, col_idx][nn_idx]
+        surf = np.array([_mi_ross(codes[i], Yr_all[i]) for i in range(n)])
+    else:
+        surf = np.array([_mi_ksg_sorted(Xr_all[i], Yr_all[i], k=k_sel) for i in range(n)])
     return var_name, surf
 
 
@@ -358,6 +391,16 @@ def _wlowess(x, t, w, frac=0.10, n_grid=200):
         except np.linalg.LinAlgError:
             out[gi] = np.average(tt, weights=k + 1e-12)
     return np.interp(x, grid, out)
+
+
+def _category_means(x, t, w=None):
+    """Weighted mean of t within each category of x, mapped back to the rows."""
+    w = np.ones_like(t) if w is None else w
+    out = np.zeros_like(t, dtype=float)
+    for lv in np.unique(x):
+        m = x == lv
+        out[m] = np.sum(w[m] * t[m]) / (np.sum(w[m]) + 1e-12)
+    return out
 
 
 def _bspline_basis(x, n_basis, degree=3, lo=None, hi=None):
@@ -462,6 +505,7 @@ class CMI:
         chunk_size: int = 2000,
         stage2: str = "pspline",
         verbose: bool = True,
+        categorical: list = None,
     ):
         """
         stage2 : "pspline" (default) — penalised-spline varying-coefficient stage 2
@@ -470,6 +514,11 @@ class CMI:
         wls    : also run the legacy kernel local-WLS stage 2 of the original
                  IJGIS implementation (outputs *_wls). Default False.
         verbose: print progress.
+        categorical : names in ``xlist`` that are nominal (unordered categories).
+                 They are one-hot encoded whenever they act as conditioning
+                 covariates; their stage-1 local information uses a label-free
+                 discrete–continuous MI estimator (Ross 2014); in stage 2 their
+                 transform g_j is a learned category-effect profile.
         """
         if stage2 not in ("pspline", "none"):
             raise ValueError("stage2 must be 'pspline' or 'none'")
@@ -551,7 +600,29 @@ class CMI:
         )
         self._log(f"{len(self._pdp_sample_idx)} points selected")
 
-        self._Z_others = {j: np.delete(self.ALL_X, j, axis=1) for j in range(self.p)}
+        self.categorical = [c for c in (categorical or []) if c in self.xlist]
+        unknown = set(categorical or []) - set(self.xlist)
+        if unknown:
+            raise ValueError(f"categorical variables not in xlist: {sorted(unknown)}")
+        self._is_cat = {vn: vn in self.categorical for vn in self.xlist}
+        for vn in self.categorical:      # nominal variables are shown as levels in PDPs
+            self._is_discrete[vn] = True
+        self._Z_others = {j: self._conditioning_matrix(j) for j in range(self.p)}
+
+    def _conditioning_matrix(self, j: int) -> np.ndarray:
+        """Other predictors used for conditioning on x_j: numeric as is,
+        categorical as one-hot dummies (first level dropped)."""
+        cols = []
+        for jj, vn in enumerate(self.xlist):
+            if jj == j:
+                continue
+            x = self.ALL_X[:, jj]
+            if self._is_cat.get(vn, False):
+                levels = np.unique(x)
+                cols.extend((x == lv).astype(float) for lv in levels[1:])
+            else:
+                cols.append(x)
+        return np.column_stack(cols) if cols else np.zeros((self.n, 0))
 
     # ── k search ─────────────────────────────────────────────────────
 
@@ -559,6 +630,8 @@ class CMI:
         Y_arr = self.Y
         X_arr = self.ALL_X[:, col_idx]
         Z_arr = self._Z_others[col_idx]
+        if self._is_cat.get(self.xlist[col_idx], False):
+            return 3, {3: np.nan}        # Ross estimator uses a fixed small k
 
         Yr = _ols_resid_scalar(Y_arr, Z_arr, self._ridge_lambda)
         if Yr is None:
@@ -601,9 +674,13 @@ class CMI:
                 Xj_nb, Z_nb, self._ridge_lambda, self._chunk_size
             )
 
-        vals = np.array(
-            [_mi_ksg_sorted(Xr_p[i], Yr_p[i], k_mi) for i in range(len(probes))]
-        )
+        if self._is_cat.get(self.xlist[col_idx], False):
+            codes = self.ALL_X[probe_nn, col_idx]
+            vals = np.array([_mi_ross(codes[i], Yr_p[i]) for i in range(len(probes))])
+        else:
+            vals = np.array(
+                [_mi_ksg_sorted(Xr_p[i], Yr_p[i], k_mi) for i in range(len(probes))]
+            )
         return float(vals.mean() - 0.15 * vals.std())
 
     def _search_bw(self, col_idx, nl_flag, k_mi, refinement=True, n_probe=120, seed=0):
@@ -746,6 +823,8 @@ class CMI:
                     bw_per_var[vn],
                     float(self._ridge_lambda),
                     self._chunk_size,
+                    self._Z_others[j],
+                    self._is_cat.get(vn, False),
                 )
             )
 
@@ -762,13 +841,16 @@ class CMI:
                 cmi_surfaces[vn] = surf
                 self._log(f"    [{vn}] done  mean={surf.mean():.4f}  max={surf.max():.4f}")
 
-        Z_sets = {j: np.delete(self.ALL_X, j, axis=1) for j in range(p)}
+        Z_sets = self._Z_others
         y_resids = {}
         pdp_curves = {}
         for j, vn in enumerate(xlist):
             Yr = _ols_resid_scalar(self.Y, Z_sets[j], self._ridge_lambda)
             y_resids[vn] = Yr
-            if Yr is not None:
+            if Yr is not None and self._is_cat.get(vn, False):
+                xg = np.unique(self.ALL_X[:, j])
+                yg = np.array([Yr[self.ALL_X[:, j] == lv].mean() for lv in xg])
+            elif Yr is not None:
                 xg, yg = _lowess_curve(self.ALL_X[:, j], Yr)
             else:
                 xg = np.linspace(self.ALL_X[:, j].min(), self.ALL_X[:, j].max(), 120)
@@ -786,7 +868,7 @@ class CMI:
         # Used by fit_local_beta() as features for distance-weighted local OLS.
         G_raw = np.zeros((n, p), dtype=np.float32)
         for j in range(p):
-            Z_oth = np.delete(self.ALL_X, j, axis=1)
+            Z_oth = self._Z_others[j]
             Zm = np.c_[np.ones(n), Z_oth]
             for c in range(1, Zm.shape[1]):
                 s = Zm[:, c].std()
@@ -803,8 +885,11 @@ class CMI:
                 np.float32
             )  # raw-scale partial residual
             xj = self.ALL_X[:, j]
-            xg_r, yg_r = _lowess_curve(xj, yr_raw_j.astype(float), frac=0.25, n_pts=200)
-            G_raw[:, j] = np.interp(xj, xg_r, yg_r).astype(np.float32)
+            if self._is_cat.get(xlist[j], False):    # category means of the partial residual
+                G_raw[:, j] = _category_means(xj, yr_raw_j.astype(float)).astype(np.float32)
+            else:
+                xg_r, yg_r = _lowess_curve(xj, yr_raw_j.astype(float), frac=0.25, n_pts=200)
+                G_raw[:, j] = np.interp(xj, xg_r, yg_r).astype(np.float32)
 
         S = np.maximum(np.column_stack([cmi_surfaces[vn] for vn in xlist]), 0.0)
         S_means = S.mean(axis=0)
@@ -920,7 +1005,11 @@ class CMI:
                 bj = beta[:, j + 1]
                 ok = np.abs(bj) > 1e-3 * (np.abs(bj).max() + 1e-12)
                 t = np.where(ok, r / np.where(ok, bj, 1.0), 0.0)
-                G[:, j] = _wlowess(self.ALL_X[:, j], t, np.where(ok, bj**2, 0.0), frac=frac)
+                wj = np.where(ok, bj**2, 0.0)
+                if self._is_cat.get(self.xlist[j], False):
+                    G[:, j] = _category_means(self.ALL_X[:, j], t, wj)
+                else:
+                    G[:, j] = _wlowess(self.ALL_X[:, j], t, wj, frac=frac)
                 X[:, j + 1] = G[:, j]
         beta = fit["beta"].copy()
         r2_vc = 1 - np.sum((y - fit["yhat"]) ** 2) / np.sum((y - y.mean()) ** 2)
@@ -934,9 +1023,15 @@ class CMI:
         orient = np.ones(self.p)
         for j in range(self.p):
             x = self.ALL_X[:, j]
-            c_lin = np.corrcoef(G[:, j], x)[0, 1]
-            c_u = np.corrcoef(G[:, j], (x - x.mean()) ** 2)[0, 1]
-            c = c_lin if abs(c_lin) >= abs(c_u) else c_u
+            if self._is_cat.get(self.xlist[j], False):
+                # nominal: no order, so orient the category profile so that the
+                # average local multiplier is positive; b_j(s) < 0 then means the
+                # local category ranking is reversed relative to the global one
+                c = float(np.mean(beta[:, j + 1]))
+            else:
+                c_lin = np.corrcoef(G[:, j], x)[0, 1]
+                c_u = np.corrcoef(G[:, j], (x - x.mean()) ** 2)[0, 1]
+                c = c_lin if abs(c_lin) >= abs(c_u) else c_u
             orient[j] = np.sign(c) if np.isfinite(c) and c != 0 else 1.0
             G[:, j] *= orient[j]
             beta[:, j + 1] *= orient[j]
@@ -957,7 +1052,8 @@ class CMI:
                              lam_vc=fit["lam"], n_basis_vc=n_basis, orient_vc=orient))
         for j, vn in enumerate(self.xlist):
             g, x = G[:, j], self.ALL_X[:, j]
-            slope = np.cov(g, x)[0, 1] / (x.var() + 1e-12)
+            slope = (np.nan if self._is_cat.get(vn, False)
+                     else np.cov(g, x)[0, 1] / (x.var() + 1e-12))
             res.df_out[f"{vn}_vc"] = beta[:, j + 1]
             res.df_out[f"{vn}_esd"] = beta[:, j + 1] * g.std()
             res.df_out[f"{vn}_lin"] = beta[:, j + 1] * slope
@@ -1639,7 +1735,7 @@ class CMI:
         scale_wls = np.ones(p, dtype=float)
         for j in range(p):
             g = G_raw[:, j].astype(float)
-            Z_oth = np.delete(self.ALL_X, j, axis=1)
+            Z_oth = self._Z_others[j]
             Zm = np.c_[np.ones(n), Z_oth]
             for c in range(1, Zm.shape[1]):
                 s = Zm[:, c].std()
