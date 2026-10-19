@@ -132,32 +132,20 @@ def _mi_ksg_sorted(Xr: np.ndarray, Yr: np.ndarray, k: int = 8) -> float:
 
     XY = np.stack([Xr, Yr], axis=1)
     dists, _ = cKDTree(XY).query(XY, k=k + 1, p=np.inf)
-    eps = dists[:, k]
+    eps = dists[:, k] + 1e-12
 
-    # KSG algorithm 1: n_x(i) = #{j != i : |x_j - x_i| < eps_i} (strict).
-    # Inclusive counting adds the k-th neighbour itself to one marginal and
-    # biases MI downward, most strongly for small windows / weak dependence.
-    # Exact ties (eps_i == 0) fall back to the previous inclusive count.
     xs = np.sort(Xr)
     ys = np.sort(Yr)
-    tie = eps <= 0
-    eps_t = np.where(tie, 1e-12, eps)
-
-    def _count(sorted_v, v):
-        hi = np.where(
-            tie,
-            np.searchsorted(sorted_v, v + eps_t, "right"),
-            np.searchsorted(sorted_v, v + eps_t, "left"),
-        )
-        lo = np.where(
-            tie,
-            np.searchsorted(sorted_v, v - eps_t, "left"),
-            np.searchsorted(sorted_v, v - eps_t, "right"),
-        )
-        return hi - lo - 1
-
-    cx = _count(xs, Xr)
-    cy = _count(ys, Yr)
+    cx = (
+        np.searchsorted(xs, Xr + eps, "right")
+        - np.searchsorted(xs, Xr - eps, "left")
+        - 1
+    )
+    cy = (
+        np.searchsorted(ys, Yr + eps, "right")
+        - np.searchsorted(ys, Yr - eps, "left")
+        - 1
+    )
     cx = np.maximum(cx, 0).astype(np.float64)
     cy = np.maximum(cy, 0).astype(np.float64)
 
@@ -1329,11 +1317,6 @@ class CMI:
         )
 
         beta_wls = np.zeros((n, p), dtype=np.float32)
-        # Local fitted level c_i and weighted local mean of G_raw. The model is
-        # stored in centred form  y ≈ c_i + Σ_j β_ij (G_ij − Ḡ_ij), so c_i is
-        # unaffected by the slope scale correction and smoothing below.
-        c_wls = res.y_local_mean.astype(np.float64).copy()
-        g_bar = np.zeros((n, p), dtype=np.float64)
         for i in range(n):
             idx = idx_all[i, 1 : k_wls + 1]
             d = dists_all[i, 1 : k_wls + 1]
@@ -1353,8 +1336,6 @@ class CMI:
                     (XtW @ Yi).astype(np.float64),
                 )
                 beta_wls[i] = b[1:].astype(np.float32)
-                g_bar[i] = w @ G_raw[idx]
-                c_wls[i] = b[0] + g_bar[i] @ b[1:]
             except Exception:
                 pass
 
@@ -1401,12 +1382,9 @@ class CMI:
                 beta_wls_smooth[i, j] = np.dot(w, beta_wls_scaled[nb, j])
         beta_wls_scaled = beta_wls_smooth
 
-        # Prediction keeps the local WLS intercept (in centred form). Previously
-        # the intercept was dropped and replaced by y_local_mean, which offsets
-        # the prediction by Σ β_ij Ḡ_ij whenever G_raw has a non-zero local mean.
-        b_final = beta_wls_scaled.astype(float)
-        y_hat_wls = c_wls + (b_final * (G_raw.astype(float) - g_bar)).sum(axis=1)
-        wls_intercept = c_wls - (b_final * g_bar).sum(axis=1)
+        y_hat_wls = res.y_local_mean + (
+            beta_wls_scaled.astype(float) * G_raw.astype(float)
+        ).sum(axis=1)
         ss_res = float(np.sum((self.Y - y_hat_wls) ** 2))
         ss_tot = float(np.sum((self.Y - self.Y.mean()) ** 2))
         r2_wls = max(0.0, 1.0 - ss_res / (ss_tot + 1e-12))
@@ -1419,7 +1397,6 @@ class CMI:
         )
         for j, vn in enumerate(self.xlist):
             res.df_out[f"{vn}_wls"] = beta_wls_scaled[:, j].astype(float)
-        res.df_out["wls_intercept"] = wls_intercept
         res.df_out["y_pred_wls"] = y_hat_wls
 
     # ── fit_local_beta (public wrapper — re-run with custom bw_dist) ──

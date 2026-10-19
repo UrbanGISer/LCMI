@@ -46,3 +46,20 @@ def test_legacy_wls_option():
     df, _ = _synthetic()
     m = CMI(df, u="u", v="v", y="y", xlist=["x1", "x2"], wls=True, verbose=False).fit(k=8, bw=60)
     assert "x1_wls" in m.df_out and np.isfinite(m.result.meta["r2_wls"])
+
+
+def test_predict_matches_fit_and_generalises():
+    df, _ = _synthetic(grid=40, seed=1)
+    m = _fit(df)
+    # in-sample prediction reproduces the fitted values
+    assert np.allclose(m.predict(df), m.df_out.y_pred_vc, atol=1e-6)
+    # held-out rows: refit on 80 %, predict the rest
+    rng = np.random.default_rng(0)
+    te = rng.random(len(df)) < 0.2
+    mt = _fit(df[~te].reset_index(drop=True))
+    yp = mt.predict(df[te])
+    y = df.y[te].to_numpy()
+    r2 = 1 - np.sum((y - yp) ** 2) / np.sum((y - y.mean()) ** 2)
+    assert r2 > 0.85
+    comp = mt.predict(df[te], return_components=True)
+    assert {"x1_esd", "x2_esd", "vc_intercept", "y_pred"} <= set(comp.columns)
