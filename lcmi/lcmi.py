@@ -844,6 +844,9 @@ class CMI:
         Outputs in df_out
         -----------------
         {v}_vc       b_j(s): multiplier of the learned transform g_j
+                     (g_j oriented by its dominant trend: increasing in x_j, or
+                     high at the extremes for U-shapes — signs of b_j are
+                     relative to this; see meta["orient_vc"])
         {v}_esd      b_j(s)·sd(g_j): Y change per 1 SD of g_j(x_j)  (scale-identified)
         {v}_lin      b_j(s)·slope(g_j ~ x_j): linear-equivalent dY/dx_j
                      (meaningful for monotone, near-linear effects)
@@ -872,14 +875,30 @@ class CMI:
                 t = np.where(ok, r / np.where(ok, bj, 1.0), 0.0)
                 G[:, j] = _wlowess(self.ALL_X[:, j], t, np.where(ok, bj**2, 0.0), frac=frac)
                 X[:, j + 1] = G[:, j]
-        beta = fit["beta"]
+        beta = fit["beta"].copy()
         r2_vc = 1 - np.sum((y - fit["yhat"]) ** 2) / np.sum((y - y.mean()) ** 2)
+
+        # Orientation convention (b·g = (−b)(−g)): flip g_j and b_j together.
+        # Use whichever describes g_j better — its linear trend or its U-shape:
+        #   |corr(g, x)| ≥ |corr(g, (x−x̄)²)|  →  g increases with x on average
+        #   otherwise                          →  g is high at the extremes (U)
+        # Signs of b_j(s) are read relative to this orientation (always report
+        # the g_j curve with the map); predictions are unchanged.
+        orient = np.ones(self.p)
+        for j in range(self.p):
+            x = self.ALL_X[:, j]
+            c_lin = np.corrcoef(G[:, j], x)[0, 1]
+            c_u = np.corrcoef(G[:, j], (x - x.mean()) ** 2)[0, 1]
+            c = c_lin if abs(c_lin) >= abs(c_u) else c_u
+            orient[j] = np.sign(c) if np.isfinite(c) and c != 0 else 1.0
+            G[:, j] *= orient[j]
+            beta[:, j + 1] *= orient[j]
 
         res.beta_vc = beta[:, 1:]
         res.intercept_vc = beta[:, 0]
         res.G_vc = G
         res.meta.update(dict(r2_vc=r2_vc, gcv_vc=fit["gcv"], edf_vc=fit["edf"],
-                             lam_vc=fit["lam"], n_basis_vc=n_basis))
+                             lam_vc=fit["lam"], n_basis_vc=n_basis, orient_vc=orient))
         for j, vn in enumerate(self.xlist):
             g, x = G[:, j], self.ALL_X[:, j]
             slope = np.cov(g, x)[0, 1] / (x.var() + 1e-12)
