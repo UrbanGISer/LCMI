@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as mgridspec
+from scipy.linalg import cho_factor, cho_solve
 from scipy.special import digamma
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
@@ -385,16 +386,19 @@ def _fit_pspline_vc(G, y, B, P, lam_grid, n_sweeps=3):
     q = p + 1
     Z = np.concatenate([B * X[:, [j]] for j in range(q)], axis=1)
     ZtZ, Zty = Z.T @ Z, Z.T @ y
+    yty = float(y @ y)
 
     def solve(lam):
+        # One Cholesky factor per lambda; triangular solves via cho_solve (the general LU solve on
+        # the factor and the extra full solve for edf dominated the run time). RSS from y'y avoids Z @ theta.
         S = ZtZ.copy()
         for j in range(q):
             S[j * m:(j + 1) * m, j * m:(j + 1) * m] += lam[j] * P
-        S += 1e-8 * np.eye(q * m)
-        L = np.linalg.cholesky(S)
-        theta = np.linalg.solve(L.T, np.linalg.solve(L, Zty))
-        edf = np.trace(np.linalg.solve(L.T, np.linalg.solve(L, ZtZ)))
-        rss = float(np.sum((y - Z @ theta) ** 2))
+        S[np.diag_indices_from(S)] += 1e-8
+        cf = cho_factor(S, lower=True, check_finite=False)
+        theta = cho_solve(cf, Zty, check_finite=False)
+        edf = float(np.trace(cho_solve(cf, ZtZ, check_finite=False)))
+        rss = max(yty - 2.0 * float(theta @ Zty) + float(theta @ ZtZ @ theta), 0.0)
         return theta, n * rss / (n - edf) ** 2, edf
 
     lam = np.ones(q)
@@ -823,7 +827,7 @@ class CMI:
         r2 = max(0.0, 1 - ss_res / (ss_tot + 1e-12))
 
         self._log(f"\n  alpha = {np.round(alpha, 4)}")
-        self._log(f"  R²    = {r2:.4f}")
+        self._log(f"  R2    = {r2:.4f}")
         self._log(f"  total time = {time.perf_counter()-t0_total:.1f}s")
 
         df_out = self.df_raw.copy()
@@ -947,8 +951,8 @@ class CMI:
         res.df_out["vc_intercept"] = beta[:, 0]
         res.df_out["y_pred_vc"] = fit["yhat"]
         if verbose:
-            self._log(f"  [stage 2 P-spline VC] R²={r2_vc:.4f}  edf={fit['edf']:.1f}  "
-                  f"λ={np.round(fit['lam'], 3).tolist()}  {time.perf_counter()-t0:.1f}s")
+            self._log(f"  [stage 2 P-spline VC] R2={r2_vc:.4f}  edf={fit['edf']:.1f}  "
+                  f"lambda={np.round(fit['lam'], 3).tolist()}  {time.perf_counter()-t0:.1f}s")
         return self
 
     # ── PDP table ─────────────────────────────────────────────────────
@@ -1642,7 +1646,7 @@ class CMI:
         ss_tot = float(np.sum((self.Y - self.Y.mean()) ** 2))
         r2_wls = max(0.0, 1.0 - ss_res / (ss_tot + 1e-12))
 
-        self._log(f"  [local beta] scale={np.round(scale_wls,4)}  R²_wls={r2_wls:.4f}")
+        self._log(f"  [local beta] scale={np.round(scale_wls,4)}  R2_wls={r2_wls:.4f}")
 
         res.beta_wls = beta_wls_scaled
         res.meta.update(
@@ -1762,13 +1766,13 @@ class CMI:
         print(f"{'='*50}")
         print(f"  Variables : {self.xlist}")
         print(f"  n         : {self.n}")
-        print(f"  R²        : {m['r2']:.4f}")
+        print(f"  R2        : {m['r2']:.4f}")
         if "r2_vc" in m:
-            print(f"  R² stage 2 (P-spline VC): {m['r2_vc']:.4f}")
+            print(f"  R2 stage 2 (P-spline VC): {m['r2_vc']:.4f}")
         print(f"  alpha     : {np.round(self.result.alpha, 4)}")
         print(f"  k per var : {m['k_per_var']}")
         print(f"  BW per var: {m['bw_per_var']}")
-        print(f"  ridge λ   : {m.get('ridge_lambda', 'n/a')}")
+        print(f"  ridge lambda: {m.get('ridge_lambda', 'n/a')}")
         print(f"{'='*50}")
 
     # ── Convenience: coefficient table and plots ─────────────────────
