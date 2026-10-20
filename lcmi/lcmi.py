@@ -359,18 +359,21 @@ def _wlowess(x, t, w, frac=0.10, n_grid=200):
     return np.interp(x, grid, out)
 
 
-def _bspline_basis(x, n_basis, degree=3):
+def _bspline_basis(x, n_basis, degree=3, lo=None, hi=None):
     from scipy.interpolate import BSpline
 
-    lo, hi = float(x.min()), float(x.max())
+    lo = float(x.min()) if lo is None else float(lo)
+    hi = float(x.max()) if hi is None else float(hi)
     inner = np.linspace(lo, hi, n_basis - degree + 1)
     t = np.r_[[lo] * degree, inner, [hi] * degree]
     return BSpline.design_matrix(np.clip(x, lo, hi), t, degree).toarray()
 
 
-def _tensor_basis(coords, n_basis=12):
-    Bu = _bspline_basis(coords[:, 0], n_basis)
-    Bv = _bspline_basis(coords[:, 1], n_basis)
+def _tensor_basis(coords, n_basis=12, bounds=None):
+    """bounds: ((u_lo, u_hi), (v_lo, v_hi)) knot range; default = range of coords."""
+    (ulo, uhi), (vlo, vhi) = bounds if bounds is not None else ((None, None), (None, None))
+    Bu = _bspline_basis(coords[:, 0], n_basis, lo=ulo, hi=uhi)
+    Bv = _bspline_basis(coords[:, 1], n_basis, lo=vlo, hi=vhi)
     B = np.einsum("ni,nj->nij", Bu, Bv).reshape(len(coords), -1)
     D = np.diff(np.eye(n_basis), n=2, axis=0)
     Pm = D.T @ D
@@ -491,6 +494,7 @@ class CMI:
             raw_coords.max(axis=0) - cmin > 1e-10, raw_coords.max(axis=0) - cmin, 1.0
         )
         self._coords = (raw_coords - cmin) / crange
+        self._cmin, self._crange = cmin, crange
 
         self.Y = df[y].values.astype(float)
         self.ALL_X = df[xlist].values.astype(float)
@@ -932,6 +936,15 @@ class CMI:
             orient[j] = np.sign(c) if np.isfinite(c) and c != 0 else 1.0
             G[:, j] *= orient[j]
             beta[:, j + 1] *= orient[j]
+        theta = fit["theta"].copy()
+        theta[1:] *= orient[:, None]
+        self._vc_state = dict(
+            theta=theta, n_basis=n_basis,
+            bounds=tuple((float(self._coords[:, a].min()), float(self._coords[:, a].max()))
+                         for a in range(2)),
+            x_sorted=[np.sort(self.ALL_X[:, j]) for j in range(self.p)],
+            g_sorted=[G[np.argsort(self.ALL_X[:, j]), j] for j in range(self.p)],
+        )
 
         res.beta_vc = beta[:, 1:]
         res.intercept_vc = beta[:, 0]
@@ -950,6 +963,35 @@ class CMI:
             self._log(f"  [stage 2 P-spline VC] R²={r2_vc:.4f}  edf={fit['edf']:.1f}  "
                   f"λ={np.round(fit['lam'], 3).tolist()}  {time.perf_counter()-t0:.1f}s")
         return self
+
+    @_quiet_matmul
+    def predict(self, df_new: pd.DataFrame, return_components: bool = False):
+        """Predict y at new locations / predictor values with the stage-2 model.
+
+        b_j(s) is evaluated from the fitted spline surfaces (locations outside the
+        training bounding box are clamped to its edge) and g_j(x) by linear
+        interpolation of the learned transforms (x outside the training range is
+        clamped). With ``return_components=True`` a DataFrame with the predicted
+        coefficient surfaces ({v}_vc, {v}_esd, vc_intercept) and y_pred is returned.
+        """
+        if getattr(self, "_vc_state", None) is None:
+            raise RuntimeError("Call fit() with stage2='pspline' first.")
+        st = self._vc_state
+        c = (df_new[[self.u_col, self.v_col]].to_numpy(float) - self._cmin) / self._crange
+        B, _ = _tensor_basis(c, st["n_basis"], bounds=st["bounds"])
+        b = B @ st["theta"].T                                   # (n_new, p + 1)
+        G = np.ones_like(b)
+        for j, vn in enumerate(self.xlist):
+            G[:, j + 1] = np.interp(df_new[vn].to_numpy(float), st["x_sorted"][j], st["g_sorted"][j])
+        y_pred = (b * G).sum(1)
+        if not return_components:
+            return y_pred
+        out = pd.DataFrame({"vc_intercept": b[:, 0]}, index=df_new.index)
+        for j, vn in enumerate(self.xlist):
+            out[f"{vn}_vc"] = b[:, j + 1]
+            out[f"{vn}_esd"] = b[:, j + 1] * self.result.G_vc[:, j].std()
+        out["y_pred"] = y_pred
+        return out
 
     # ── PDP table ─────────────────────────────────────────────────────
 

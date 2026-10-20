@@ -39,6 +39,7 @@ model.plot_transforms()       # learned shapes g_j(x_j)
 model.plot_pdp()              # partial-dependence decomposition (stage 1)
 
 out = model.df_out            # your data + all LCMI columns
+y_new = model.predict(new_df) # predict at new locations / predictor values
 ```
 
 ## Outputs (`model.df_out`)
@@ -67,6 +68,7 @@ CMI(df, u, v, y, xlist,
 model.fit()                          # automatic k / bandwidth search
 model.fit(k=8, bw=200)               # fixed values (int, or dict per variable)
 model.fit_vc(n_basis=16)             # refit stage 2 with a finer spline basis
+model.predict(new_df, return_components=True)   # coefficients + y at new rows
 model.result.meta                    # r2, r2_vc, edf_vc, lam_vc, k_per_var, bw_per_var, ...
 ```
 
@@ -76,6 +78,7 @@ model.result.meta                    # r2, r2_vc, edf_vc, lam_vc, k_per_var, bw_
 1. **Synthetic data:** recovery of known spatially varying, nonlinear effects.
 2. **King County house prices:** an empirical application.
 3. **Benchmark:** comparison with GWR, MGWR, GeoShapley and XGeoML on the synthetic data. Needs `pip install mgwr geoshapley XGeoML`.
+4. **Robustness:** out-of-sample prediction, and data outside LCMI's model class.
 
 ## Method
 
@@ -83,16 +86,32 @@ model.result.meta                    # r2, r2_vc, edf_vc, lam_vc, k_per_var, bw_
 
 <img width="1803" height="1109" alt="Two-stage estimation" src="https://github.com/user-attachments/assets/d9d39ede-0b86-4e6e-a26e-689e3fc7c341" />
 
-**Changes relative to the code published with the paper.** The paper code is in [`lcmi-ijgis/`](lcmi-ijgis/).
+**Changes relative to the code published with the paper.** The paper code in [`lcmi-ijgis/`](lcmi-ijgis/) is kept exactly as published; the package differs as follows:
 - **Stage 2 is now a penalised-spline varying-coefficient model** with the transforms `g_j` re-estimated jointly. It replaces the kernel local WLS and gives more accurate, smoother coefficient surfaces. Signs are now absolute: the original `*_wls` signs were relative to the global average effect.
 - **Stage-1 KSG estimator uses strict neighbour counts**, which reduces a downward bias in small windows.
 - The original stage 2 is still available with `wls=True`.
+
+## When to trust the maps
+
+LCMI's stage 2 assumes that every effect has the separable form `bj(s) · gj(xj)`: one global shape, scaled up, down or flipped by location.
+
+| synthetic data (100 × 100, noise SD 0.5) | noise ceiling R² | LCMI out-of-fold R² | gradient boosting [x, u, v] out-of-fold R² |
+|---|---|---|---|
+| separable effects (the benchmark above) | 0.970 | 0.967 | 0.881 |
+| shape changes with location + interaction | 0.974 | 0.849 | 0.902 |
+
+- **When the assumption holds,** LCMI generalises out of sample almost up to the noise ceiling. There is no leakage or overfitting, and on data with no spatial variation it does not invent any.
+- **The benchmark generator satisfies the assumption.** LCMI's near-perfect scores there partly reflect a matched model class.
+- **When effects interact or change shape over space,** a flexible model predicts better. LCMI's maps are then the best *separable summary* of the effects, not their full structure.
+- **Practical check:** compare `model.predict` out of sample with a flexible model. A large gap means the maps should be read as summaries.
 
 ## Limitations
 - Coefficient surfaces are smooth by construction. Very sharp spatial boundaries will be rounded.
 - The spline basis is a regular grid over the bounding box of the coordinates. Strongly irregular study areas may need a larger `n_basis`.
 - Rare binary predictors are weakly identified.
-- No prediction at new locations or standard errors yet.
+- Effects that interact or change shape over space are only approximated (see above).
+- `predict` clamps locations outside the training bounding box and predictor values outside the training range.
+- No standard errors / confidence bands yet.
 
 ## Citation
 
