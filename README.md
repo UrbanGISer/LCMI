@@ -57,6 +57,34 @@ y_new = model.predict(new_df) # predict at new locations / predictor values
 
 **Reading signs.** A coefficient `b(s) > 0` means the local effect has the shape shown by `plot_transforms()`; `b(s) < 0` means the mirror image. Each `g(x)` is oriented to increase with `x`, or, for U-shaped effects, to be high at the extremes.
 
+## Categorical data
+
+| outcome | predictors | use |
+|---|---|---|
+| continuous | numeric and/or categorical | `CMI(..., categorical=[...])` → signed effect maps `{x}_esd` |
+| **nominal (classes)** | categorical and/or continuous | `CMIc` (module `lcmi_c`) → local (conditional) mutual information maps |
+
+```python
+from lcmi import CMIc, quantile_codes
+
+df["edu_q5"] = quantile_codes(df["edu"], 5)            # optional: coarse classes for a numeric variable
+m = CMIc(df, u="lon", v="lat", y="vote_class",
+         xlist=["edu_q5", "black_q5", "income"],
+         categorical=["edu_q5", "black_q5"], bw=440)
+m.fit(condition="auto")                                # or {x: [columns]}; None = pairwise only
+m.summary()                                            # mean MI / CMI, ranking, reliability check
+m.plot_maps(kind="cmi")                                # {x}_mi, {x}_cmi (+ _smooth) in m.df_out
+```
+
+How the estimators work:
+- **Nominal x vs nominal y.** Debiased local plug-in MI: Miller–Madow corrected tables minus a permutation null, so the result is essentially unbiased in small windows.
+- **Continuous x vs nominal y.** Discrete–continuous MI (Ross 2014) on x adjusted for the other predictors, with nominal ones one-hot encoded.
+
+All of these are invariant to category labels.
+- **Conditioning.** `condition=` gives the local conditional MI Σ_z p(z) I(x; y | z), which separates a predictor's own information from information shared with an associated predictor.
+- **Reliability check.** The `retention_check` column re-computes the estimate with a shuffled z. Values well below 0.8 mean the local strata are too sparse; use coarser classes or a larger `bw`.
+- **Helper functions.** `local_mi_nominal`, `local_mi_mixed`, `onehot`, `conditioning_matrix`, `cramers_v`, `quantile_codes`.
+
 ## Common options
 
 ```python
@@ -82,6 +110,13 @@ model.result.meta                    # r2, r2_vc, edf_vc, lam_vc, k_per_var, bw_
 2. **King County house prices:** an empirical application.
 3. **Benchmark:** comparison with GWR, MGWR, GeoShapley and XGeoML on the synthetic data. Needs `pip install mgwr geoshapley XGeoML`.
 4. **Robustness:** out-of-sample prediction, and data outside LCMI's model class.
+
+[`notebooks/LCMI_categorical_examples.ipynb`](notebooks/LCMI_categorical_examples.ipynb) covers categorical data:
+1. **Synthetic, categorical predictors with a continuous outcome:** sign-changing category effects, label invariance.
+2. **Synthetic, nominal outcome:** the fully nominal benchmark, correlated predictors and conditioning, and a continuous predictor.
+3. **2016 U.S. election (3,108 counties):** pairwise and conditional maps of education, Black share, Hispanic share and density for a three-class vote outcome.
+
+The data are in `data/us_election_2016_counties.csv` (public GeoDa Center data).
 
 ## Method
 

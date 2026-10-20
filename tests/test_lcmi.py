@@ -107,3 +107,31 @@ def test_shared_categorical_estimators():
     yc = (xc + 0.5 * rng.normal(size=n) > 0).astype(int)
     a, b = local_mi_mixed(yc, xc, nb), local_mi_mixed(1 - yc, xc, nb)
     assert a.mean() > 0.2 and np.allclose(a, b)
+
+
+def test_cmic_nominal_outcome():
+    from lcmi import CMIc
+    rng = np.random.default_rng(1)
+    g = 40
+    u1 = np.linspace(0, 1, g)
+    U, V = np.meshgrid(u1, u1)
+    u, v = U.ravel(), V.ravel()
+    n = u.size
+    x2 = rng.integers(0, 4, n)
+    x1 = np.where(rng.random(n) < 0.6, x2, rng.integers(0, 4, n))   # copy of x2, no effect
+    xc = rng.normal(size=n)                                          # continuous predictor
+    w = 0.5 + 2.5 * u                                                # x2 effect grows eastwards
+    logit = w * (x2 == 1) - w * (x2 == 3) + 0.8 * xc
+    y = (logit + rng.normal(size=n) > 0.5).astype(int)
+    df = pd.DataFrame(dict(u=u, v=v, y=y, x1=x1, x2=x2, xc=xc))
+    m = CMIc(df, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
+             verbose=False).fit(condition="auto", levels_z=4)
+    s = m.summary()
+    assert s.loc["x1", "given"] == "x2"
+    assert abs(s.loc["x1", "mean_cmi"]) < 0.01 < s.loc["x1", "mean_mi"]   # spurious pairwise, ~0 given x2
+    assert np.corrcoef(m.df_out["x2_mi"], w)[0, 1] > 0.6                  # follows the spatial weight
+    assert s.loc["xc", "mean_mi"] > 0.05
+    df2 = df.assign(y=1 - df.y, x2=(df.x2 + 1) % 4)                        # relabel classes and categories
+    m2 = CMIc(df2, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
+              verbose=False).fit()
+    assert np.allclose(m2.df_out["x2_mi"], m.df_out["x2_mi"])
