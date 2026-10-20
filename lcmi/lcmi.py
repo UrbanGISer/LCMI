@@ -274,6 +274,96 @@ def _mi_ross(xc: np.ndarray, y: np.ndarray, k: int = 3) -> float:
     return max(0.0, float(val))
 
 
+# ── Shared local-information estimators for categorical data ─────────
+#
+# Public helpers used by CMI and by other LCMI front ends (e.g. the rLCMI
+# diagnostic). All are invariant to how categories are labelled.
+
+
+def onehot(codes) -> np.ndarray:
+    """One-hot dummies for a nominal variable (first level dropped)."""
+    codes = np.asarray(codes)
+    levels = np.unique(codes)
+    return np.column_stack([(codes == lv).astype(float) for lv in levels[1:]]) \
+        if levels.size > 1 else np.zeros((codes.size, 0))
+
+
+def conditioning_matrix(X, categorical_mask) -> np.ndarray:
+    """Stack numeric columns as is and categorical columns as one-hot dummies."""
+    X = np.asarray(X)
+    cols = []
+    for j, is_cat in enumerate(categorical_mask):
+        cols.append(onehot(X[:, j]) if is_cat else X[:, [j]].astype(float))
+    return np.column_stack(cols) if cols else np.zeros((X.shape[0], 0))
+
+
+def local_mi_mixed(codes, x, nn_idx, k: int = 3) -> np.ndarray:
+    """Local MI between a nominal variable and a continuous variable in each
+    neighbourhood (rows of ``nn_idx``), Ross (2014) estimator. Works for
+    nominal x / continuous y and continuous x / nominal y alike."""
+    codes = np.asarray(codes)
+    x = np.asarray(x, dtype=float)
+    out = np.empty(nn_idx.shape[0])
+    for i, nb in enumerate(nn_idx):
+        xi = x[nb]
+        out[i] = _mi_ross(codes[nb], (xi - xi.mean()) / (xi.std() + 1e-12), k=k)
+    return out
+
+
+def _codes(a):
+    _, inv = np.unique(np.asarray(a), return_inverse=True)
+    return inv
+
+
+def _local_cmi_counts(x, y, z, nn_idx, cx, cy, cz):
+    n, bw = nn_idx.shape
+    J = ((z * cx + x) * cy + y)[nn_idx]
+    cnt = np.zeros((n, cz * cx * cy))
+    np.add.at(cnt, (np.repeat(np.arange(n), bw), J.ravel()), 1)
+    N = cnt.reshape(n, cz, cx, cy)
+    out = np.zeros(n)
+    for zz in range(cz):
+        Nz = N[:, zz]
+        m = Nz.sum((1, 2))
+        P = Nz / np.maximum(m, 1)[:, None, None]
+        px, py = P.sum(2, keepdims=True), P.sum(1, keepdims=True)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = np.where(P > 0, P * np.log(P / (px * py)), 0.0)
+        mi = t.sum((1, 2))
+        kx = (px[:, :, 0] > 0).sum(1)
+        ky = (py[:, 0, :] > 0).sum(1)
+        kxy = (P > 0).sum((1, 2))
+        mm = np.where(m > 1, mi + (kxy - kx - ky + 1) / (2 * np.maximum(m, 1)), 0.0)  # Miller–Madow
+        out += (m / bw) * mm
+    return out
+
+
+def local_mi_nominal(x, y, nn_idx, z=None, n_perm: int = 5, seed: int = 0) -> np.ndarray:
+    """Debiased local mutual information between nominal x and nominal y.
+
+    Plug-in estimate from local contingency tables (Miller–Madow corrected),
+    minus the mean of a permutation null in which x is shuffled (within the
+    strata of z, if given) — this removes the small-sample bias of sparse
+    local tables. With ``z`` (a nominal conditioning variable; combine several
+    with ``np.unique(np.c_[...], axis=0, return_inverse=True)[1]``) the result
+    is the local conditional MI  Σ_z p(z) I(x; y | z). Keep z coarse: each
+    stratum needs enough points inside a neighbourhood.
+    """
+    rng = np.random.default_rng(seed)
+    x, y = _codes(x), _codes(y)
+    z = np.zeros_like(x) if z is None else _codes(z)
+    cx, cy, cz = x.max() + 1, y.max() + 1, z.max() + 1
+    obs = _local_cmi_counts(x, y, z, nn_idx, cx, cy, cz)
+    null = np.zeros_like(obs)
+    for _ in range(int(n_perm)):
+        xs = x.copy()
+        for zz in range(cz):
+            idx = np.where(z == zz)[0]
+            xs[idx] = x[rng.permutation(idx)]
+        null += _local_cmi_counts(xs, y, z, nn_idx, cx, cy, cz)
+    return obs - null / max(int(n_perm), 1)
+
+
 def _compute_one_surface(args):
     (
         var_name,

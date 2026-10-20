@@ -87,3 +87,23 @@ def test_categorical_predictor_label_invariant():
     assert abs(np.corrcoef(fits[0], fits[1])[0, 1]) > 0.9999      # relabelling-invariant
     assert abs(np.corrcoef(fits[0], truth)[0, 1]) > 0.95
     assert np.isnan(m.df_out["c_lin"]).all()
+
+
+def test_shared_categorical_estimators():
+    from sklearn.neighbors import NearestNeighbors
+    from lcmi import local_mi_mixed, local_mi_nominal
+    rng = np.random.default_rng(0)
+    n = 900
+    coords = rng.random((n, 2))
+    nb = NearestNeighbors(n_neighbors=150).fit(coords).kneighbors(coords)[1]
+    x = rng.integers(0, 4, n)
+    y_dep = np.where(rng.random(n) < 0.6, x, rng.integers(0, 4, n))   # dependent
+    y_ind = rng.integers(0, 4, n)                                      # independent
+    dep, ind = local_mi_nominal(x, y_dep, nb), local_mi_nominal(x, y_ind, nb)
+    assert dep.mean() > 0.2 and abs(ind.mean()) < 0.02                 # debiased null ~ 0
+    perm = np.array([3, 1, 0, 2])
+    assert np.allclose(local_mi_nominal(perm[x], y_dep, nb), dep)      # label-invariant
+    xc = rng.normal(size=n)
+    yc = (xc + 0.5 * rng.normal(size=n) > 0).astype(int)
+    a, b = local_mi_mixed(yc, xc, nb), local_mi_mixed(1 - yc, xc, nb)
+    assert a.mean() > 0.2 and np.allclose(a, b)
