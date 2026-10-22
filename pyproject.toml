@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geocmi"
-version = "0.1.0"
-description = "Local Conditional Mutual Information (LCMI): interpretable, nonlinear spatially varying effect modelling"
+version = "0.1.1"
+description = "Residualized Local Conditional Mutual Information (LCMI): interpretable, nonlinear spatially varying effect modelling"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
