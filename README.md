@@ -1,8 +1,8 @@
 # LCMI
 
-**Local Conditional Mutual Information (LCMI): A Scalable Information-Theoretic Framework for Interpretable and Nonlinear Spatially Varying Effect Modelling**
+**Residualized Local Conditional Mutual Information (LCMI): A Scalable Information-Theoretic Framework for Interpretable and Nonlinear Spatially Varying Effect Modelling**
 
-<img width="1422" height="282" alt="LCMI overview" src="https://github.com/user-attachments/assets/0ea2948e-6be8-4f3c-abe0-eb702a633223" />
+![LCMI overview](https://github.com/user-attachments/assets/0ea2948e-6be8-4f3c-abe0-eb702a633223)
 
 LCMI estimates how the effect of each predictor varies across space, without assuming the effect is linear. It works in two stages.
 1. **Local dependence (stage 1).** At every location, LCMI measures the conditional mutual information between each predictor and the response within a local neighbourhood. This gives an unsigned "where does x_j matter" surface.
@@ -126,40 +126,24 @@ The data are in `data/us_election_2016_counties.csv` (public GeoDa Center data).
 
 ## Method
 
-<img width="1629" height="957" alt="Illustration of LCMI" src="https://github.com/user-attachments/assets/9536aec7-4aa4-411d-bc68-5d7f124104f0" />
+![Illustration of LCMI](https://github.com/user-attachments/assets/9536aec7-4aa4-411d-bc68-5d7f124104f0)
 
-<img width="1803" height="1109" alt="Two-stage estimation" src="https://github.com/user-attachments/assets/d9d39ede-0b86-4e6e-a26e-689e3fc7c341" />
+![Two-stage estimation](https://github.com/user-attachments/assets/d9d39ede-0b86-4e6e-a26e-689e3fc7c341)
 
 **Changes relative to the code published with the paper.** The paper code in [`lcmi-ijgis/`](https://github.com/UrbanGISer/LCMI/tree/main/lcmi-ijgis) is kept exactly as published; the package differs as follows:
 - **Stage 2 is now a penalised-spline varying-coefficient model** with the transforms `g_j` re-estimated jointly. It replaces the kernel local WLS and gives more accurate, smoother coefficient surfaces. Signs are now absolute: the original `*_wls` signs were relative to the global average effect.
 - **Stage-1 KSG estimator uses strict neighbour counts**, which reduces a downward bias in small windows.
 - The original stage 2 is still available with `wls=True`.
 
-## When to trust the maps
+## Model assumptions
 
-LCMI's stage 2 assumes that every effect has the separable form `bj(s) · gj(xj)`: one global shape, scaled up, down or flipped by location.
-
-| synthetic data (100 × 100, noise SD 0.5) | noise ceiling R² | LCMI out-of-fold R² | gradient boosting [x, u, v] out-of-fold R² |
-|---|---|---|---|
-| separable effects (the benchmark above) | 0.970 | 0.967 | 0.881 |
-| shape changes with location + interaction | 0.974 | 0.849 | 0.902 |
-
-- **When the assumption holds,** LCMI generalises out of sample almost up to the noise ceiling. There is no leakage or overfitting, and on data with no spatial variation it does not invent any.
-- **The benchmark generator satisfies the assumption.** LCMI's near-perfect scores there partly reflect a matched model class.
-- **When effects interact or change shape over space,** a flexible model predicts better. LCMI's maps are then the best *separable summary* of the effects, not their full structure.
-- **Practical check:** compare `model.predict` out of sample with a flexible model. A large gap means the maps should be read as summaries.
-
-## Limitations
-- Coefficient surfaces are smooth by construction. Very sharp spatial boundaries will be rounded.
-- The spline basis is a regular grid over the bounding box of the coordinates. Strongly irregular study areas may need a larger `n_basis`.
-- Rare binary predictors are weakly identified.
-- Effects that interact or change shape over space are only approximated (see above).
-- `predict` clamps locations outside the training bounding box and predictor values outside the training range.
-- No standard errors / confidence bands yet.
+- **Separable effects.** Stage 2 represents each effect as `bj(s) · gj(xj)`: one nonlinear shape whose strength and sign vary over space. When effects interact or change shape across locations, the maps give the best separable summary of them. Comparing `model.predict` out of sample with a flexible learner is a simple check.
+- **Smooth surfaces.** Coefficient surfaces are penalised splines, so very sharp spatial boundaries are smoothed. For strongly irregular study areas, a larger `n_basis` can help.
+- **Prediction range.** `predict` clamps new locations to the training bounding box, and new predictor values to the training range.
 
 ## Citation
 
-Liu, L. Local Conditional Mutual Information (LCMI): A Scalable Information-Theoretic Framework for Interpretable and Nonlinear Spatially Varying Effect Modelling. *International Journal of Geographical Information Science* (accepted).
+Liu, L. Residualized Local Conditional Mutual Information (LCMI): A Scalable Information-Theoretic Framework for Interpretable and Nonlinear Spatially Varying Effect Modelling. *International Journal of Geographical Information Science*.
 
 ## License
 
