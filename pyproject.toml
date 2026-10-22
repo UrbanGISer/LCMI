@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lcmi"
+name = "geocmi"
 version = "0.1.0"
 description = "Local Conditional Mutual Information (LCMI): interpretable, nonlinear spatially varying effect modelling"
 readme = "README.md"

@@ -14,7 +14,13 @@ LCMI estimates how the effect of each predictor varies across space, without ass
 ## Installation
 
 ```bash
-pip install lcmi
+pip install geocmi
+```
+
+The PyPI distribution is called `geocmi`; the module is imported as `lcmi`:
+
+```python
+from lcmi import CMI, CMIc
 ```
 
 From source (this repository):
