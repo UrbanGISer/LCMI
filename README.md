@@ -105,13 +105,13 @@ model.result.meta                    # r2, r2_vc, edf_vc, lam_vc, k_per_var, bw_
 
 ## Examples
 
-[`notebooks/LCMI_examples.ipynb`](notebooks/LCMI_examples.ipynb) covers:
+[`notebooks/LCMI_examples.ipynb`](https://github.com/UrbanGISer/LCMI/blob/main/notebooks/LCMI_examples.ipynb) covers:
 1. **Synthetic data:** recovery of known spatially varying, nonlinear effects.
 2. **King County house prices:** an empirical application.
 3. **Benchmark:** comparison with GWR, MGWR, GeoShapley and XGeoML on the synthetic data. Needs `pip install mgwr geoshapley XGeoML`.
 4. **Robustness:** out-of-sample prediction, and data outside LCMI's model class.
 
-[`notebooks/LCMI_categorical_examples.ipynb`](notebooks/LCMI_categorical_examples.ipynb) covers categorical data:
+[`notebooks/LCMI_categorical_examples.ipynb`](https://github.com/UrbanGISer/LCMI/blob/main/notebooks/LCMI_categorical_examples.ipynb) covers categorical data:
 1. **Synthetic, categorical predictors with a continuous outcome:** sign-changing category effects, label invariance.
 2. **Synthetic, nominal outcome:** the fully nominal benchmark, correlated predictors and conditioning, and a continuous predictor.
 3. **2016 U.S. election (3,108 counties):** pairwise and conditional maps of education, Black share, Hispanic share and density for a three-class vote outcome.
@@ -124,7 +124,7 @@ The data are in `data/us_election_2016_counties.csv` (public GeoDa Center data).
 
 <img width="1803" height="1109" alt="Two-stage estimation" src="https://github.com/user-attachments/assets/d9d39ede-0b86-4e6e-a26e-689e3fc7c341" />
 
-**Changes relative to the code published with the paper.** The paper code in [`lcmi-ijgis/`](lcmi-ijgis/) is kept exactly as published; the package differs as follows:
+**Changes relative to the code published with the paper.** The paper code in [`lcmi-ijgis/`](https://github.com/UrbanGISer/LCMI/tree/main/lcmi-ijgis) is kept exactly as published; the package differs as follows:
 - **Stage 2 is now a penalised-spline varying-coefficient model** with the transforms `g_j` re-estimated jointly. It replaces the kernel local WLS and gives more accurate, smoother coefficient surfaces. Signs are now absolute: the original `*_wls` signs were relative to the global average effect.
 - **Stage-1 KSG estimator uses strict neighbour counts**, which reduces a downward bias in small windows.
 - The original stage 2 is still available with `wls=True`.

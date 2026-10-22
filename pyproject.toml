@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "lcmi"
 version = "0.1.0"
 description = "Local Conditional Mutual Information (LCMI): interpretable, nonlinear spatially varying effect modelling"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Lingbo Liu" }]
 requires-python = ">=3.9"
 dependencies = [
@@ -21,7 +22,6 @@ dependencies = [
 keywords = ["spatial", "GIS", "mutual information", "varying coefficient", "GWR", "explainable AI"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: GIS",
 ]
