@@ -1,7 +1,7 @@
 """
 lcmi_c — local (conditional) mutual information for categorical data.
 
-Covers the cases the regression-based ``lcmi.CMI`` cannot: a NOMINAL outcome
+Covers the cases the regression-based ``geocmi.lcmi.CMI`` cannot: a NOMINAL outcome
 (classes) with nominal and/or continuous predictors. (Categorical predictors
 with a continuous outcome are handled by ``CMI(..., categorical=[...])``.)
 
@@ -17,10 +17,10 @@ All estimators are invariant to how categories are labelled.
 
 Quick start
 -----------
-    from lcmi import CMIc, quantile_codes
+    from geocmi import lcmi_c
 
-    df["edu_q5"] = quantile_codes(df["edu"], 5)
-    m = CMIc(df, u="lon", v="lat", y="vote_class",
+    df["edu_q5"] = lcmi_c.quantile_codes(df["edu"], 5)
+    m = lcmi_c.CMIc(df, u="lon", v="lat", y="vote_class",
              xlist=["edu_q5", "income"], categorical=["edu_q5"]).fit(condition="auto")
     m.summary()                 # mean local MI / CMI, ranking, reliability check
     m.plot_maps(kind="cmi")

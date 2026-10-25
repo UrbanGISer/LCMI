@@ -16,9 +16,9 @@ Stage 2  varying-coefficient model  y = b_0(s) + Σ_j b_j(s) · g_j(x_j)
 
 Quick start
 -----------
-    from lcmi import CMI
+    from geocmi import lcmi
 
-    model = CMI(df, u="u", v="v", y="y", xlist=["x1", "x2", "x3"]).fit()
+    model = lcmi.CMI(df, u="u", v="v", y="y", xlist=["x1", "x2", "x3"]).fit()
     model.summary()
     model.coef_table()                 # summary of the coefficient surfaces
     model.plot_coefficients()          # maps of {v}_esd
@@ -30,7 +30,7 @@ Quick start
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 import functools
 import time
