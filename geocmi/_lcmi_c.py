@@ -1,9 +1,9 @@
 """
 lcmi_c — local (conditional) mutual information for categorical data.
 
-Covers the cases the regression-based ``geocmi.lcmi.CMI`` cannot: a NOMINAL outcome
+Covers the cases the regression-based ``geocmi.lcmi`` cannot: a NOMINAL outcome
 (classes) with nominal and/or continuous predictors. (Categorical predictors
-with a continuous outcome are handled by ``CMI(..., categorical=[...])``.)
+with a continuous outcome are handled by ``geocmi.lcmi(..., categorical=[...])``.)
 
 All estimators are invariant to how categories are labelled.
 
@@ -17,10 +17,10 @@ All estimators are invariant to how categories are labelled.
 
 Quick start
 -----------
-    from geocmi import lcmi_c
+    from geocmi import lcmi_c, quantile_codes
 
-    df["edu_q5"] = lcmi_c.quantile_codes(df["edu"], 5)
-    m = lcmi_c.CMIc(df, u="lon", v="lat", y="vote_class",
+    df["edu_q5"] = quantile_codes(df["edu"], 5)
+    m = lcmi_c(df, u="lon", v="lat", y="vote_class",
              xlist=["edu_q5", "income"], categorical=["edu_q5"]).fit(condition="auto")
     m.summary()                 # mean local MI / CMI, ranking, reliability check
     m.plot_maps(kind="cmi")
@@ -45,9 +45,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 
-from .lcmi import _mi_ross
+from ._lcmi import _mi_ross, _quiet_matmul
 
-__all__ = ["CMIc", "quantile_codes", "cramers_v", "onehot", "conditioning_matrix",
+__all__ = ["lcmi_c", "quantile_codes", "cramers_v", "onehot", "conditioning_matrix",
            "local_mi_mixed", "local_mi_nominal"]
 
 
@@ -163,7 +163,7 @@ def _knn_smooth(surf, coords, k):
 
 # ── model ─────────────────────────────────────────────────────────────
 
-class CMIc:
+class lcmi_c:
     """Local (conditional) mutual information maps for a nominal outcome.
 
     Parameters
@@ -223,8 +223,9 @@ class CMIc:
         scores = {c: cramers_v(xc, self._code_of(c, levels_z)) for c in others}
         return max(scores, key=scores.get) if scores else None
 
+    @_quiet_matmul
     def fit(self, condition: Union[None, str, dict] = None, levels_z: int = 3,
-            check: bool = True) -> "CMIc":
+            check: bool = True) -> "lcmi_c":
         """Compute local MI maps (and local CMI maps when ``condition`` is given).
 
         condition : None   — pairwise maps only
