@@ -16,9 +16,9 @@ Stage 2  varying-coefficient model  y = b_0(s) + Σ_j b_j(s) · g_j(x_j)
 
 Quick start
 -----------
-    from geocmi import lcmi
+    import geocmi
 
-    model = lcmi.CMI(df, u="u", v="v", y="y", xlist=["x1", "x2", "x3"]).fit()
+    model = geocmi.lcmi(df, u="u", v="v", y="y", xlist=["x1", "x2", "x3"]).fit()
     model.summary()
     model.coef_table()                 # summary of the coefficient surfaces
     model.plot_coefficients()          # maps of {v}_esd
@@ -465,7 +465,7 @@ def _fit_pspline_vc(G, y, B, P, lam_grid, n_sweeps=3):
 # ── Main class ────────────────────────────────────────────────────────
 
 
-class CMI:
+class lcmi:
     """
     Conditional Mutual Information spatial regression model.
 
@@ -582,7 +582,7 @@ class CMI:
 
         max_bw = min(max(self.bw_candidates) + 20, self.n - 1)
         self._log(
-            f"  [CMI.__init__] Building nn_idx at max_bw={max_bw} ...",
+            f"  [lcmi.__init__] Building nn_idx at max_bw={max_bw} ...",
             end=" ",
             flush=True,
         )
@@ -594,7 +594,7 @@ class CMI:
         del nn
         self._log(f"{time.perf_counter()-t0:.2f}s  shape={self._nn_idx.shape}")
 
-        self._log(f"  [CMI.__init__] Building PDP sample points ...", end=" ", flush=True)
+        self._log(f"  [lcmi.__init__] Building PDP sample points ...", end=" ", flush=True)
         self._pdp_sample_idx, self._pdp_bin_edges = _build_pdp_sample_points(
             self.ALL_X, self.xlist, n_bins=60, pts_per_bin=80, seed=self.seed
         )
@@ -720,7 +720,7 @@ class CMI:
         refinement: bool = True,
         n_probe: int = 120,
         sigma_smooth=None,
-    ) -> "CMI":
+    ) -> "lcmi":
         """
         Estimate CMI surfaces and calibrate the prediction model.
 
@@ -745,7 +745,7 @@ class CMI:
         single_bw = isinstance(bw, int)
 
         self._log(f"\n{'='*60}")
-        self._log(f"CMI.fit()  n={n}  p={p}  vars={xlist}")
+        self._log(f"lcmi.fit()  n={n}  p={p}  vars={xlist}")
         self._log(f"{'='*60}")
 
         for j, vn in enumerate(xlist):
@@ -964,7 +964,7 @@ class CMI:
         frac: float = 0.10,
         lam_grid=None,
         verbose: bool = True,
-    ) -> "CMI":
+    ) -> "lcmi":
         """
         Estimate y = b_0(s) + Σ_j b_j(s)·g_j(x_j) jointly (called by fit()).
 
@@ -1798,7 +1798,7 @@ class CMI:
     # ── fit_local_beta (public wrapper — re-run with custom bw_dist) ──
 
     @_quiet_matmul
-    def fit_local_beta(self, bw_dist: float = None, n_neighbors: int = None) -> "CMI":
+    def fit_local_beta(self, bw_dist: float = None, n_neighbors: int = None) -> "lcmi":
         """
         Re-run local WLS beta estimation with a custom bw_dist or n_neighbors.
         Under normal usage this is NOT needed — fit() calls this automatically.
