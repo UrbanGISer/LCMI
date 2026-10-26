@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from lcmi import CMI
+from geocmi import lcmi, lcmi_c
 
 
 def _synthetic(grid=40, mean_shift=1.0, seed=0):
@@ -19,7 +19,7 @@ def _synthetic(grid=40, mean_shift=1.0, seed=0):
 
 
 def _fit(df):
-    return CMI(df, u="u", v="v", y="y", xlist=["x1", "x2"], verbose=False).fit(k=8, bw=60)
+    return lcmi.CMI(df, u="u", v="v", y="y", xlist=["x1", "x2"], verbose=False).fit(k=8, bw=60)
 
 
 def test_outputs_and_fit():
@@ -44,7 +44,7 @@ def test_recovers_signed_effects():
 
 def test_legacy_wls_option():
     df, _ = _synthetic()
-    m = CMI(df, u="u", v="v", y="y", xlist=["x1", "x2"], wls=True, verbose=False).fit(k=8, bw=60)
+    m = lcmi.CMI(df, u="u", v="v", y="y", xlist=["x1", "x2"], wls=True, verbose=False).fit(k=8, bw=60)
     assert "x1_wls" in m.df_out and np.isfinite(m.result.meta["r2_wls"])
 
 
@@ -80,7 +80,7 @@ def test_categorical_predictor_label_invariant():
     fits = []
     for codes in (c, perm[c]):
         df = pd.DataFrame(dict(u=u, v=v, y=y, x1=x1, c=codes))
-        m = CMI(df, u="u", v="v", y="y", xlist=["x1", "c"], categorical=["c"],
+        m = lcmi.CMI(df, u="u", v="v", y="y", xlist=["x1", "c"], categorical=["c"],
                 verbose=False).fit(bw=60)
         fits.append(m.df_out["c_esd"].to_numpy())
     truth = b2 * mu[c].std()
@@ -91,7 +91,6 @@ def test_categorical_predictor_label_invariant():
 
 def test_shared_categorical_estimators():
     from sklearn.neighbors import NearestNeighbors
-    from lcmi import local_mi_mixed, local_mi_nominal
     rng = np.random.default_rng(0)
     n = 900
     coords = rng.random((n, 2))
@@ -99,18 +98,17 @@ def test_shared_categorical_estimators():
     x = rng.integers(0, 4, n)
     y_dep = np.where(rng.random(n) < 0.6, x, rng.integers(0, 4, n))   # dependent
     y_ind = rng.integers(0, 4, n)                                      # independent
-    dep, ind = local_mi_nominal(x, y_dep, nb), local_mi_nominal(x, y_ind, nb)
+    dep, ind = lcmi_c.local_mi_nominal(x, y_dep, nb), lcmi_c.local_mi_nominal(x, y_ind, nb)
     assert dep.mean() > 0.2 and abs(ind.mean()) < 0.02                 # debiased null ~ 0
     perm = np.array([3, 1, 0, 2])
-    assert np.allclose(local_mi_nominal(perm[x], y_dep, nb), dep)      # label-invariant
+    assert np.allclose(lcmi_c.local_mi_nominal(perm[x], y_dep, nb), dep)      # label-invariant
     xc = rng.normal(size=n)
     yc = (xc + 0.5 * rng.normal(size=n) > 0).astype(int)
-    a, b = local_mi_mixed(yc, xc, nb), local_mi_mixed(1 - yc, xc, nb)
+    a, b = lcmi_c.local_mi_mixed(yc, xc, nb), lcmi_c.local_mi_mixed(1 - yc, xc, nb)
     assert a.mean() > 0.2 and np.allclose(a, b)
 
 
 def test_cmic_nominal_outcome():
-    from lcmi import CMIc
     rng = np.random.default_rng(1)
     g = 40
     u1 = np.linspace(0, 1, g)
@@ -124,7 +122,7 @@ def test_cmic_nominal_outcome():
     logit = w * (x2 == 1) - w * (x2 == 3) + 0.8 * xc
     y = (logit + rng.normal(size=n) > 0.5).astype(int)
     df = pd.DataFrame(dict(u=u, v=v, y=y, x1=x1, x2=x2, xc=xc))
-    m = CMIc(df, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
+    m = lcmi_c.CMIc(df, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
              verbose=False).fit(condition="auto", levels_z=4)
     s = m.summary()
     assert s.loc["x1", "given"] == "x2"
@@ -132,6 +130,6 @@ def test_cmic_nominal_outcome():
     assert np.corrcoef(m.df_out["x2_mi"], w)[0, 1] > 0.6                  # follows the spatial weight
     assert s.loc["xc", "mean_mi"] > 0.05
     df2 = df.assign(y=1 - df.y, x2=(df.x2 + 1) % 4)                        # relabel classes and categories
-    m2 = CMIc(df2, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
+    m2 = lcmi_c.CMIc(df2, "u", "v", "y", ["x1", "x2", "xc"], categorical=["x1", "x2"], bw=300,
               verbose=False).fit()
     assert np.allclose(m2.df_out["x2_mi"], m.df_out["x2_mi"])

@@ -17,10 +17,9 @@ LCMI estimates how the effect of each predictor varies across space, without ass
 pip install geocmi
 ```
 
-The PyPI distribution is called `geocmi`; the module is imported as `lcmi`:
-
 ```python
-from lcmi import CMI, CMIc
+import geocmi                       # geocmi.lcmi.CMI   — continuous outcome
+from geocmi import lcmi, lcmi_c     # lcmi_c.CMIc       — nominal outcome (classes)
 ```
 
 From source (this repository):
@@ -34,9 +33,9 @@ Dependencies: numpy, pandas, scipy, scikit-learn, matplotlib, joblib.
 ## Quick start
 
 ```python
-from lcmi import CMI
+from geocmi import lcmi
 
-model = CMI(df, u="lon", v="lat", y="y", xlist=["x1", "x2", "x3"]).fit()
+model = lcmi.CMI(df, u="lon", v="lat", y="y", xlist=["x1", "x2", "x3"]).fit()
 
 model.summary()               # R² of both stages, selected k / bandwidth
 model.coef_table()            # summary of the coefficient surfaces
@@ -67,16 +66,16 @@ y_new = model.predict(new_df) # predict at new locations / predictor values
 
 | outcome | predictors | use |
 |---|---|---|
-| continuous | numeric and/or categorical | `CMI(..., categorical=[...])` → signed effect maps `{x}_esd` |
-| **nominal (classes)** | categorical and/or continuous | `CMIc` (module `lcmi_c`) → local (conditional) mutual information maps |
+| continuous | numeric and/or categorical | `lcmi.CMI(..., categorical=[...])` → signed effect maps `{x}_esd` |
+| **nominal (classes)** | categorical and/or continuous | `lcmi_c.CMIc` → local (conditional) mutual information maps |
 
 ```python
-from lcmi import CMIc, quantile_codes
+from geocmi import lcmi_c
 
-df["edu_q5"] = quantile_codes(df["edu"], 5)            # optional: coarse classes for a numeric variable
-m = CMIc(df, u="lon", v="lat", y="vote_class",
-         xlist=["edu_q5", "black_q5", "income"],
-         categorical=["edu_q5", "black_q5"], bw=440)
+df["edu_q5"] = lcmi_c.quantile_codes(df["edu"], 5)     # optional: coarse classes for a numeric variable
+m = lcmi_c.CMIc(df, u="lon", v="lat", y="vote_class",
+                xlist=["edu_q5", "black_q5", "income"],
+                categorical=["edu_q5", "black_q5"], bw=440)
 m.fit(condition="auto")                                # or {x: [columns]}; None = pairwise only
 m.summary()                                            # mean MI / CMI, ranking, reliability check
 m.plot_maps(kind="cmi")                                # {x}_mi, {x}_cmi (+ _smooth) in m.df_out
@@ -89,12 +88,12 @@ How the estimators work:
 All of these are invariant to category labels.
 - **Conditioning.** `condition=` gives the local conditional MI Σ_z p(z) I(x; y | z), which separates a predictor's own information from information shared with an associated predictor.
 - **Reliability check.** The `retention_check` column re-computes the estimate with a shuffled z. Values well below 0.8 mean the local strata are too sparse; use coarser classes or a larger `bw`.
-- **Helper functions.** `local_mi_nominal`, `local_mi_mixed`, `onehot`, `conditioning_matrix`, `cramers_v`, `quantile_codes`.
+- **Helper functions** (in `lcmi_c`): `local_mi_nominal`, `local_mi_mixed`, `onehot`, `conditioning_matrix`, `cramers_v`, `quantile_codes`.
 
 ## Common options
 
 ```python
-CMI(df, u, v, y, xlist,
+lcmi.CMI(df, u, v, y, xlist,
     k_candidates=[4, 6, 8, 10, 12],  # KSG neighbours searched in stage 1
     bw_candidates=None,              # stage-1 window sizes (None = automatic)
     n_jobs=-1,

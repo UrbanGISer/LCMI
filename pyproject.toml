@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geocmi"
-version = "0.1.1"
+version = "0.2.0"
 description = "Residualized Local Conditional Mutual Information (LCMI): interpretable, nonlinear spatially varying effect modelling"
 readme = "README.md"
 license = "MIT"
@@ -33,4 +33,4 @@ examples = ["mgwr", "geoshapley", "XGeoML", "jupyter"]
 Homepage = "https://github.com/UrbanGISer/LCMI"
 
 [tool.setuptools]
-packages = ["lcmi"]
+packages = ["geocmi"]
